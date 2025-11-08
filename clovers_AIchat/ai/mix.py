@@ -24,6 +24,13 @@ class Chat(AIChat):
             resp_content = await self.chat_text.chat(nickname, text, image_url)
         return resp_content
 
+    async def call(self, system_prompt: str, text: str, image_url: str | None) -> str | None:
+        if image_url:
+            resp_content = await self.chat_image.call(system_prompt, text, image_url)
+        else:
+            resp_content = await self.chat_text.call(system_prompt, text, image_url)
+        return resp_content
+
     def memory_clear(self) -> None:
         self.chat_text.messages.clear()
 

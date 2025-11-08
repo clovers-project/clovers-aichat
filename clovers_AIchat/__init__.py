@@ -100,7 +100,7 @@ async def _(event: Event):
         return f"本群【{manager.name} - {chat.name}】设定已重置！"
 
 
-@plugin.handle(None, ["user_id", "group_id", "nickname", "to_me", "image_list"], rule=to_me, priority=1, block=False)
+@plugin.handle(None, ["user_id", "group_id", "nickname", "to_me", "image_list"], rule=to_me, priority=2, block=False)
 async def _(event: Event):
     group_id = event.group_id or f"private:{event.user_id}"
     chat = AI_driver.chat(group_id)

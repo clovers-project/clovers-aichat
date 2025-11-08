@@ -9,14 +9,18 @@ pattern = re.compile(r"<think>(.*)</think>(.*)", re.DOTALL)
 class Chat(OpenAIChat):
     """Ollama DeepSeek"""
 
-    async def ChatCompletions(self):
-        def build_content(message: ChatContext):
-            return {"role": message["role"], "content": message["text"]}
+    async def build_payload(self, system_prompt, context):
+        def build_content(context: ChatContext):
+            return {"role": context["role"], "content": "".join([seg["text"] for seg in context["messages"] if seg["type"] == "text"])}
 
         messages = []
-        messages.append({"role": "system", "content": self.system_prompt})
-        messages.extend(map(build_content, self.messages))
-        resp = await self.async_client.post(self.url, headers=self.headers, json={"model": self.model, "messages": messages})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.extend(map(build_content, context))
+        return {"model": self.model, "messages": messages}
+
+    async def call_api(self, payload):
+        resp = await self.async_client.post(self.url, headers=self.headers, json=payload)
         resp.raise_for_status()
         resp_content: str = resp.json()["choices"][0]["message"]["content"].strip()
         matcher = pattern.match(resp_content)

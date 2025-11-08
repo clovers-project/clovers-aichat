@@ -1,8 +1,9 @@
 import httpx
 from datetime import datetime
 from abc import ABC, abstractmethod
-from typing import TypedDict, Literal
+from typing import TypedDict, Literal, Iterable, NotRequired
 from logging import getLogger
+from collections import deque
 
 logger = getLogger("AICHAT")
 
@@ -16,6 +17,9 @@ class AIChat(ABC):
 
     @abstractmethod
     async def chat(self, nickname: str, text: str, image_url: str | None) -> str | None: ...
+
+    @abstractmethod
+    async def call(self, system_prompt: str, text: str, image_url: str | None) -> str | None: ...
 
     @abstractmethod
     def memory_clear(self) -> None: ...
@@ -41,52 +45,81 @@ class ChatInfo:
     """风格提示词"""
 
 
+class TextSegment(TypedDict):
+    """文本消息"""
+
+    type: Literal["text"]
+    text: str
+
+
+class ImageSegment(TypedDict):
+    """图片消息"""
+
+    type: Literal["image"]
+    image_url: NotRequired[str]
+    image_data: NotRequired[str]
+
+
 class ChatContext(TypedDict):
     """对话上下文"""
 
     time: float
     role: Literal["user", "assistant"]
-    text: str
-    image_url: str | None
+    messages: list[TextSegment | ImageSegment]
 
 
 class ChatInterface(ChatInfo, AIChat):
     """模型对话接口"""
 
-    messages: list[ChatContext]
+    messages: deque[ChatContext]
     """对话记录"""
     memory: int
     """对话记录长度"""
     timeout: int | float
     """对话超时时间"""
-    date: str
-    """当前日期"""
 
     def __init__(self, config: dict, async_client: httpx.AsyncClient) -> None:
         super().__init__()
-        self.messages = []
         self.async_client = async_client
         self._parse_config(config)
+        self.messages = deque(maxlen=self.memory + 1)
 
     @abstractmethod
     def _parse_config(self, config: dict) -> dict: ...
+
     @abstractmethod
-    async def ChatCompletions(self) -> str: ...
+    async def build_payload(self, system_prompt: str, context: Iterable[ChatContext]):
+        """构建请求参数
+
+        Args:
+            system_prompt (str): 总系统提示词
+            context (Iterable[ChatContext]): 对话上下文
+        """
+
+    @abstractmethod
+    async def call_api(self, payload) -> str:
+        """调用API
+
+        Args:
+            payload (Any): 请求参数
+
+        Returns:
+            str: 响应内容
+        """
 
     def memory_filter(self, timestamp: int | float):
         """过滤记忆"""
         timeout = timestamp - self.timeout
-        self.messages = [message for message in self.messages if message["time"] > timeout]
-        if len(self.messages) > self.memory:
-            self.messages = self.messages[-self.memory :]
+        while self.messages and self.messages[0]["time"] <= timeout:
+            self.messages.popleft()
         if self.messages[0]["role"] == "assistant":
-            self.messages = self.messages[1:]
+            self.messages.popleft()
         assert self.messages[0]["role"] == "user"
 
     @property
     def system_prompt(self) -> str:
         """系统提示词"""
-        return f"{self._system_prompt}\n{self.style_prompt}\n{self.date}"
+        return f"{self._system_prompt}\n{self.style_prompt}"
 
     @system_prompt.setter
     def system_prompt(self, system_prompt: str) -> None:
@@ -94,24 +127,44 @@ class ChatInterface(ChatInfo, AIChat):
 
     async def chat(self, nickname: str, text: str, image_url: str | None):
         now = datetime.now()
-        self.date = f'date:{now.strftime("%Y-%m-%d")}'
         timestamp = now.timestamp()
+        content = []
+        content.append({"type": "text", "text": f'{nickname} [{now.strftime("%H:%M")}] {text}'})
+        if image_url:
+            content.append({"type": "image", "image_url": image_url})
         chat_context: ChatContext = {
             "time": timestamp,
             "role": "user",
-            "text": f'{nickname} [{now.strftime("%H:%M")}] {text}',
-            "image_url": image_url,
+            "messages": content,
         }
         self.messages.append(chat_context)
         self.memory_filter(timestamp)
         try:
-            resp_content = await self.ChatCompletions()
+            payload = await self.build_payload(
+                f"{self._system_prompt}\n{self.style_prompt}\ndate:{now.strftime("%Y-%m-%d")}",
+                self.messages,
+            )
+            resp_content = await self.call_api(payload)
         except Exception as err:
-            del self.messages[-1]
+            self.messages.pop()
             logger.exception(err)
             return
-        self.messages.append({"time": timestamp, "role": "assistant", "text": resp_content, "image_url": None})
+        self.messages.append({"time": timestamp, "role": "assistant", "messages": [{"type": "text", "text": resp_content}]})
         return resp_content
+
+    async def call(self, system_prompt: str, text: str, image_url: str | None):
+        timestamp = datetime.now().timestamp()
+        messages = []
+        messages.append({"type": "text", "text": text})
+        if image_url:
+            messages.append({"type": "image", "image_url": image_url})
+        try:
+            payload = await self.build_payload(system_prompt, [{"role": "user", "time": timestamp, "messages": messages}])
+            resp_content = await self.call_api(payload)
+        except Exception as err:
+            logger.exception(err)
+            return
+        self.messages.append({"time": timestamp, "role": "assistant", "messages": [{"type": "text", "text": resp_content}]})
 
     def memory_clear(self) -> None:
         self.messages.clear()

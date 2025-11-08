@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import hashlib
 import hmac
 import json
-from ..core import ChatInterface, ChatInfo
+from ..core import ChatInterface, ChatInfo, ChatContext
 
 
 class Config(ChatInfo, BaseModel):
@@ -66,11 +66,26 @@ class Chat(ChatInterface):
         self.secret_id = _config.secret_id
         self.secret_key = _config.secret_key
 
-    async def ChatCompletions(self):
-        messages = [{"Role": "system", "Content": self.system_prompt}]
-        messages.extend({"Role": message["role"], "Content": message["text"]} for message in self.messages)
-        payload = {"Model": self.model, "Messages": messages}
-        payload = json.dumps({"Model": self.model, "Messages": messages}, separators=(",", ":"), ensure_ascii=False)
+    async def build_payload(self, system_prompt, context):
+        def build_content(context: ChatContext):
+            content = []
+            for seg in context["messages"]:
+                if seg["type"] == "text":
+                    content.append({"Type": "text", "Text": seg["text"]})
+                elif seg["type"] == "image":
+                    if "image_data" in seg:
+                        content.append({"Type": "image_url", "ImageUrl": {"Url": f"data:image/jpeg;base64,{seg['image_data']}"}})
+                    elif "image_url" in seg:
+                        content.append({"Type": "image_url", "ImageUrl": {"Url": seg["image_url"]}})
+            return {"Role": context["role"], "Contents": content}
+
+        messages = []
+        if system_prompt:
+            messages.append({"Role": "system", "Content": system_prompt})
+        messages.extend(map(build_content, context))
+        return json.dumps({"Model": self.model, "Messages": messages}, separators=(",", ":"), ensure_ascii=False)
+
+    async def call_api(self, payload) -> str:
         resp = await self.async_client.post(
             self.url,
             headers=headers(secret_id=self.secret_id, secret_key=self.secret_key, host=self.host, payload=payload),

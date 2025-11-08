@@ -1,11 +1,8 @@
 from pydantic import BaseModel
 import base64
-from typing import TypedDict
-from ..core import ChatInterface, ChatInfo, ChatContext as BaseChatContext
-
-
-class ChatContext(BaseChatContext, TypedDict):
-    image_data: str | None
+import asyncio
+from httpx import HTTPStatusError
+from ..core import ChatInterface, ChatInfo, ChatContext, ImageSegment
 
 
 class Config(ChatInfo, BaseModel):
@@ -14,8 +11,6 @@ class Config(ChatInfo, BaseModel):
 
 class Chat(ChatInterface):
     """Gemini"""
-
-    messages: list[ChatContext]
 
     def _parse_config(self, config: dict):
         _config = Config.model_validate(config)
@@ -26,34 +21,46 @@ class Chat(ChatInterface):
         self.timeout = _config.timeout
         self.url = f"{_config.url.rstrip("/")}/{_config.model}:generateContent?key={_config.api_key}"
 
-    async def build_content(self, text: str, image_url: str | None):
-        data: list[dict] = [{"text": text}]
-        if image_url:
-            response = (await self.async_client.get(image_url)).raise_for_status()
-            image_data = base64.b64encode(response.content).decode("utf-8")
-            data.append({"inline_data": {"mime_type": "image/jpeg", "data": image_data}})
+    async def build_payload(self, system_prompt, context):
+
+        async def download_image(data: dict, seg: ImageSegment, image_url: str):
+            resp = await self.async_client.get(image_url)
+            if resp.status_code == 200:
+                data["inline_data"]["data"] = seg["image_data"] = base64.b64encode(resp.content).decode("utf-8")
+            else:
+                data.clear()
+                data["type"] = "text"
+                data["text"] = "[image]"
+
+        def build_content(context: ChatContext, tasks: list) -> dict:
+            content = []
+            for seg in context["messages"]:
+                if seg["type"] == "text":
+                    content.append({"text": seg["text"]})
+                elif seg["type"] == "image":
+                    data = {"inline_data": {"mime_type": "image/jpeg"}}
+                    if image_data := seg.get("image_data"):
+                        data["inline_data"]["data"] = image_data
+                    elif image_url := seg.get("image_url"):
+                        tasks.append(asyncio.create_task(download_image(data, seg, image_url)))
+                    else:
+                        raise ValueError("Image segment must have either image_data or image_url.")
+                    content.append(data)
+
+            if context["role"] == "user":
+                return {"role": "user", "parts": content}
+            else:
+                return {"role": "model", "parts": content}
+
+        data = {}
+        tasks = []
+        data["contents"] = [build_content(message, tasks) for message in context]
+        await asyncio.gather(*tasks)
+        if system_prompt:
+            data["system_instruction"] = {"parts": [{"text": system_prompt}]}
         return data
 
-    async def ChatCompletions(self):
-        async def build_content(message: ChatContext) -> dict:
-            context = []
-            context.append({"text": message["text"]})
-            image_url = message["image_url"]
-            if image_url:
-                if (image_data := message.get("image_data")) is None:
-                    response = (await self.async_client.get(image_url)).raise_for_status()
-                    image_data = base64.b64encode(response.content).decode("utf-8")
-                    message["image_data"] = image_data
-                context.append({"inline_data": {"mime_type": "image/jpeg", "data": image_data}})
-            if message["role"] == "user":
-                return {"role": "user", "parts": context}
-            else:
-                return {"role": "model", "parts": context}
-
-        data = {
-            "system_instruction": {"parts": {"text": self.system_prompt}},
-            "contents": [await build_content(message) for message in self.messages],
-        }
-        resp = await self.async_client.post(self.url, json=data, headers={"Content-Type": "application/json"})
+    async def call_api(self, payload):
+        resp = await self.async_client.post(self.url, json=payload, headers={"Content-Type": "application/json"})
         resp.raise_for_status()
         return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()

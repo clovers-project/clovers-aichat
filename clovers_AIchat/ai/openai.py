@@ -22,20 +22,27 @@ class Chat(ChatInterface):
             "Content-Type": "application/json",
         }
 
-    async def ChatCompletions(self):
-        def build_content(message: ChatContext):
-            text = message["text"]
-            image_url = message["image_url"]
-            if image_url is None:
-                context = text
-            else:
-                context = [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": image_url}}]
-            return {"role": message["role"], "content": context}
+    async def build_payload(self, system_prompt, context):
+        def build_content(context: ChatContext):
+            content = []
+            for seg in context["messages"]:
+                if seg["type"] == "text":
+                    content.append({"type": "text", "text": seg["text"]})
+                elif seg["type"] == "image":
+                    if "image_data" in seg:
+                        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{seg['image_data']}"}})
+                    elif "image_url" in seg:
+                        content.append({"type": "image_url", "image_url": {"url": seg["image_url"]}})
+            return {"role": context["role"], "content": content}
 
         messages = []
-        messages.append({"role": "system", "content": self.system_prompt})
-        messages.extend(map(build_content, self.messages))
-        resp = await self.async_client.post(self.url, headers=self.headers, json={"model": self.model, "messages": messages})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.extend(map(build_content, context))
+        return {"model": self.model, "messages": messages}
+
+    async def call_api(self, payload) -> str:
+        resp = await self.async_client.post(self.url, headers=self.headers, json=payload)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
