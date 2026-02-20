@@ -180,9 +180,15 @@ whitelist = ["744751179"]
 
 如果你的模型配置的 key 是 `gemini`,那么你还需要填写以下参数：
 
-`url` 模型 api 接入点，例如 `https://generativelanguage.googleapis.com/v1beta/models`,使用的方法为 generateContent 暂时不能修改。
+`url` 模型 api 接入点，例如 `https://generativelanguage.googleapis.com/v1beta/models`,使用的方法为 generateContent。
 
 `api_key` 谷歌云 api key
+
+`google_search` 布尔值，是否使用谷歌搜索工具
+
+`url_context` 布尔值，是否使用 url 上下文工具
+
+`code_execution` 布尔值，是否使用代码执行工具
 
 ## DeepSeek
 
