@@ -128,22 +128,17 @@ class ChatInterface(ChatInfo, AIChat):
     async def chat(self, nickname: str, text: str, image_url: str | None):
         now = datetime.now()
         timestamp = now.timestamp()
-        content = []
-        content.append({"type": "text", "text": f'{nickname} [{now.strftime("%H:%M")}] {text}'})
-        if image_url:
-            content.append({"type": "image", "image_url": image_url})
-        chat_context: ChatContext = {
+        context: ChatContext = {
             "time": timestamp,
             "role": "user",
-            "messages": content,
+            "messages": [{"type": "text", "text": f'{nickname} [{now.strftime("%H:%M")}] {text}'}],
         }
-        self.messages.append(chat_context)
+        if image_url:
+            context["messages"].append({"type": "image", "image_url": image_url})
+        self.messages.append(context)
         self.memory_filter(timestamp)
         try:
-            payload = await self.build_payload(
-                f"{self._system_prompt}\n{self.style_prompt}\ndate:{now.strftime("%Y-%m-%d")}",
-                self.messages,
-            )
+            payload = await self.build_payload(f"{self.system_prompt}\ndate:{now.strftime("%Y-%m-%d")}", self.messages)
             resp_content = await self.call_api(payload)
         except Exception as err:
             self.messages.pop()
@@ -154,17 +149,14 @@ class ChatInterface(ChatInfo, AIChat):
 
     async def call(self, system_prompt: str, text: str, image_url: str | None):
         timestamp = datetime.now().timestamp()
-        messages = []
-        messages.append({"type": "text", "text": text})
+        context: ChatContext = {"role": "user", "time": timestamp, "messages": [{"type": "text", "text": text}]}
         if image_url:
-            messages.append({"type": "image", "image_url": image_url})
+            context["messages"].append({"type": "image", "image_url": image_url})
         try:
-            payload = await self.build_payload(system_prompt, [{"role": "user", "time": timestamp, "messages": messages}])
-            resp_content = await self.call_api(payload)
+            payload = await self.build_payload(system_prompt, (context,))
+            return await self.call_api(payload)
         except Exception as err:
             logger.exception(err)
-            return
-        self.messages.append({"time": timestamp, "role": "assistant", "messages": [{"type": "text", "text": resp_content}]})
 
     def memory_clear(self) -> None:
         self.messages.clear()

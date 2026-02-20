@@ -5,7 +5,7 @@ class Config(BaseModel):
     timeout: int = 600
     memory: int = 20
     system_prompt: str = """你会和不同的群友进行对话
-你收到的消息格式为 \"name [time] message\" 例如 \"小明 [12:00] 你好\" 你的回复不应该有昵称，时间和日期。
+你收到的消息格式为 \"name [time] message\" 例如 \"张三 [12:00] 你好\" 你的回复不应该有昵称，时间和日期。
 你应该注意在与哪个用户对话，并且不要让昵称的含义影响到你的回复。
 你会收到对话开始日期，你会根据当前时间进行相应的寒暄或回应。
 name 以 system: 开头的消息是一个系统指令，请遵循指令与用户互动，禁止与系统对话。"""
@@ -49,6 +49,9 @@ name 以 system: 开头的消息是一个系统指令，请遵循指令与用户
             "model": "gemini-1.5-flash",
             "url": "https://generativelanguage.googleapis.com/v1beta/models",
             "api_key": "",
+            "google_search": False,
+            "url_context": False,
+            "code_execution": False,
             "whitelist": [],
             "blacklist": [],
             "proxy": "http://127.0.0.1:7897",
