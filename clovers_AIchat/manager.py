@@ -1,6 +1,7 @@
 import httpx
 from pathlib import Path
 from pydantic import BaseModel
+from clovers.logger import logger
 from .core import AIChat, ChatInterface
 from .ai.mix import Chat as MixChat
 from .ai.openai import Chat as OpenAIChat
@@ -91,3 +92,57 @@ class Manager(ManagerInfo):
 
     def blacklist_check(self, group_id: str) -> bool:
         return group_id not in self.blacklist
+
+
+class AIDriver:
+    def __init__(self, system_prompt: str, style_prompt: str, memory: int, timeout: int):
+        self.managers: list[Manager] = []
+        self.system_prompt = system_prompt
+        self.style_prompt = style_prompt
+        self.memory = memory
+        self.timeout = timeout
+
+    def add_manager(self, manager: Manager):
+        if manager.whitelist:
+            logger.info(f"{manager.name} 检查规则设置为白名单模式：{manager.whitelist}")
+            manager.check = manager.whitelist_check
+        elif manager.blacklist:
+            logger.info(f"{manager.name} 检查规则设置为黑名单模式：{manager.blacklist}")
+            manager.check = manager.blacklist_check
+        else:
+            logger.info(f"{manager.name} 未设置黑白名单，已在全部群组启用")
+            manager.check = manager.none_check
+        self.managers.append(manager)
+
+    def chat(self, group_id: str):
+        manager = self.manager(group_id)
+        if manager:
+            return manager.chat(group_id)
+
+    def manager(self, group_id: str):
+        for manager in self.managers:
+            if manager.check(group_id):
+                return manager
+
+    async def close(self):
+        for manager in self.managers:
+            await manager.async_client.aclose()
+        self.managers.clear()
+
+    @classmethod
+    def from_config(cls, config_list: list[dict], system_prompt: str, style_prompt: str, memory: int, timeout: int) -> "AIDriver":
+        self = cls(system_prompt, style_prompt, memory, timeout)
+        for config_unit in config_list:
+            manager_config = {
+                "system_prompt": self.system_prompt,
+                "style_prompt": self.style_prompt,
+                "memory": self.memory,
+                "timeout": self.timeout,
+            }
+            manager_config.update(config_unit)
+            try:
+                self.add_manager(Manager(manager_config))
+            except Exception as e:
+                logger.exception(e)
+                logger.debug(config_unit)
+        return self
